@@ -21,7 +21,7 @@
 @property (nonatomic, readwrite) CGFloat segmentWidth;
 @property (nonatomic, readwrite) NSArray<NSNumber *> *segmentWidthsArray;
 @property (nonatomic, strong) HMScrollView *scrollView;
-
+@property (nonatomic, strong) NSArray<UIButton *> *accessibilityButtons;
 @end
 
 @implementation HMScrollView
@@ -78,6 +78,8 @@
     if (self) {
         [self commonInit];
         self.sectionTitles = sectiontitles;
+        self.accessibilityButtons = [[NSArray alloc] initWithArray:
+                            [self emptyButtonsArray:sectiontitles.count]];
         self.type = HMSegmentedControlTypeText;
     }
     
@@ -91,6 +93,8 @@
         [self commonInit];
         self.sectionImages = sectionImages;
         self.sectionSelectedImages = sectionSelectedImages;
+        self.accessibilityButtons = [[NSArray alloc] initWithArray:
+                    [self emptyButtonsArray:sectionSelectedImages.count]];
         self.type = HMSegmentedControlTypeImages;
     }
     
@@ -110,10 +114,17 @@
         self.sectionImages = sectionImages;
         self.sectionSelectedImages = sectionSelectedImages;
 		self.sectionTitles = sectiontitles;
+        self.accessibilityButtons = [[NSArray alloc] initWithArray:
+                        [self emptyButtonsArray:sectiontitles.count]];
         self.type = HMSegmentedControlTypeTextImages;
     }
     
     return self;
+}
+
+- (void)dealloc
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIAccessibilityVoiceOverStatusChanged object:nil];
 }
 
 - (void)awakeFromNib {
@@ -160,6 +171,8 @@
     self.selectionIndicatorBoxOpacity = 0.2;
     
     self.contentMode = UIViewContentModeRedraw;
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(voiceOverStatusChanged:) name:UIAccessibilityVoiceOverStatusChanged object:nil];
 }
 
 - (void)layoutSubviews {
@@ -342,7 +355,8 @@
                 
                 [self.scrollView.layer addSublayer:verticalDividerLayer];
             }
-        
+            
+            [self applyAccessibilityButtonsWithRect:fullRect text:[self attributedTitleAtIndex:idx].string index:idx];
             [self addBackgroundAndBorderLayerWithRect:fullRect];
         }];
     } else if (self.type == HMSegmentedControlTypeImages) {
@@ -377,7 +391,7 @@
                 
                 [self.scrollView.layer addSublayer:verticalDividerLayer];
             }
-            
+            [self applyAccessibilityButtonsWithRect:rect text:@"ImageButtons" index:idx];
             [self addBackgroundAndBorderLayerWithRect:rect];
         }];
     } else if (self.type == HMSegmentedControlTypeTextImages){
@@ -447,7 +461,7 @@
             [self.scrollView.layer addSublayer:imageLayer];
 			titleLayer.contentsScale = [[UIScreen mainScreen] scale];
             [self.scrollView.layer addSublayer:titleLayer];
-			
+			[self applyAccessibilityButtonsWithRect:imageRect text:[self attributedTitleAtIndex:idx].string index:idx];
             [self addBackgroundAndBorderLayerWithRect:imageRect];
         }];
 	}
@@ -630,7 +644,8 @@
     
     if (self.type == HMSegmentedControlTypeText && self.segmentWidthStyle == HMSegmentedControlSegmentWidthStyleFixed) {
         [self.sectionTitles enumerateObjectsUsingBlock:^(id titleString, NSUInteger idx, BOOL *stop) {
-            CGFloat stringWidth = [self measureTitleAtIndex:idx].width + self.segmentEdgeInset.left + self.segmentEdgeInset.right;
+            CGSize stringSize = [self measureTitleAtIndex:idx];
+            CGFloat stringWidth = stringSize.width + self.segmentEdgeInset.left + self.segmentEdgeInset.right;
             self.segmentWidth = MAX(stringWidth, self.segmentWidth);
         }];
     } else if (self.type == HMSegmentedControlTypeText && self.segmentWidthStyle == HMSegmentedControlSegmentWidthStyleDynamic) {
@@ -698,11 +713,14 @@
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     UITouch *touch = [touches anyObject];
     CGPoint touchLocation = [touch locationInView:self];
-    
+    [self handleTouchInPoint:touchLocation];
+}
+
+- (void) handleTouchInPoint:(CGPoint)touchLocation {
     CGRect enlargeRect =   CGRectMake(self.bounds.origin.x - self.enlargeEdgeInset.left,
-                      self.bounds.origin.y - self.enlargeEdgeInset.top,
-                      self.bounds.size.width + self.enlargeEdgeInset.left + self.enlargeEdgeInset.right,
-                      self.bounds.size.height + self.enlargeEdgeInset.top + self.enlargeEdgeInset.bottom);
+                                      self.bounds.origin.y - self.enlargeEdgeInset.top,
+                                      self.bounds.size.width + self.enlargeEdgeInset.left + self.enlargeEdgeInset.right,
+                                      self.bounds.size.height + self.enlargeEdgeInset.top + self.enlargeEdgeInset.bottom);
     
     if (CGRectContainsPoint(enlargeRect, touchLocation)) {
         NSInteger segment = 0;
@@ -897,6 +915,59 @@
     }
     
     return [resultingAttrs copy];
+}
+
+#pragma mark - Accessibility Support
+
+- (NSArray<UIButton *> *) emptyButtonsArray:(NSUInteger) count {
+    NSMutableArray<UIButton *> *array = [[NSMutableArray alloc] initWithCapacity:count];
+    for (NSUInteger i = 0; i < count; i++) {
+        UIButton *button = [[UIButton alloc] initWithFrame:CGRectZero];
+        [array addObject:button];
+    }
+    return array;
+}
+
+- (void)voiceOverStatusChanged:(NSNotification *)n {
+    [self updateAccessibilityButtonsHidden];
+}
+
+- (void)applyAccessibilityButtonsWithRect:(CGRect)fullRect text:(NSString *)text index:(NSUInteger) index {
+    UIButton *button = self.accessibilityButtons[index];
+    BOOL selected = (index == self.selectedSegmentIndex) ? YES : NO;
+    button.frame = fullRect;
+    button.hidden = !UIAccessibilityIsVoiceOverRunning();
+    button.accessibilityLabel = text;
+    button.accessibilityTraits = UIAccessibilityTraitButton;
+    if (selected) {
+        button.accessibilityTraits |= UIAccessibilityTraitSelected;
+    }
+    [button addTarget:self
+               action:@selector(accessibilityButtonsClicked:)
+     forControlEvents:UIControlEventTouchUpInside];
+    [self addSubview:button];
+}
+
+- (void) updateAccessibilityButtonsHidden {
+    [self.accessibilityButtons enumerateObjectsUsingBlock:^(UIButton* button, NSUInteger idx, BOOL *stop) {
+        button.hidden = !UIAccessibilityIsVoiceOverRunning();
+    }];
+}
+
+- (void)accessibilityButtonsClicked:(id)sender {
+    if ([sender isKindOfClass:[UIButton class]]) {
+        UIButton *button = sender;
+        NSInteger i = 0;
+        for (UIButton *btn in _accessibilityButtons) {
+            if (btn == button) {
+                if (_selectedSegmentIndex != i) {
+                    [self setSelectedSegmentIndex:i animated:NO notify:YES];
+                    UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, button);
+                }
+            }
+            i++;
+        }
+    }
 }
 
 @end
